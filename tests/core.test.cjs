@@ -294,10 +294,10 @@ test('a persisted earlier expiry is respected and later tampering cannot extend 
   assert.equal(rs.cachePolicy(entry, at).expiresAt, at + rs.CACHE_TTL);
 });
 
-test('credential entry requires a known isolated manager runtime, never a page/raw fallback', () => {
-  assert.equal(rs.isIsolatedRuntime({ scriptHandler: 'Violentmonkey', injectInto: 'content' }), true);
-  assert.equal(rs.isIsolatedRuntime({ scriptHandler: 'Tampermonkey', sandboxMode: 'dom' }), true);
-  for (const info of [null, {}, { scriptHandler: 'Violentmonkey', injectInto: 'page' }, { scriptHandler: 'Violentmonkey', injectInto: 'auto' }, { scriptHandler: 'Tampermonkey', sandboxMode: 'raw' }, { scriptHandler: 'Tampermonkey', sandboxMode: 'js' }]) assert.equal(rs.isIsolatedRuntime(info), false);
+test('runtime policy accepts normal Tampermonkey modes and Violentmonkey content without claiming isolation', () => {
+  assert.equal(rs.isSupportedRuntime({ scriptHandler: 'Violentmonkey', injectInto: 'content' }), true);
+  for (const sandboxMode of ['dom', 'raw', 'js']) assert.equal(rs.isSupportedRuntime({ scriptHandler: 'Tampermonkey', sandboxMode }), true);
+  for (const info of [null, {}, { scriptHandler: 'Unknown', sandboxMode: 'dom' }, { scriptHandler: 'Violentmonkey', injectInto: 'page' }, { scriptHandler: 'Violentmonkey', injectInto: 'auto' }, { scriptHandler: 'Tampermonkey' }, { scriptHandler: 'Tampermonkey', sandboxMode: 'unknown' }]) assert.equal(rs.isSupportedRuntime(info), false);
 });
 
 test('grouping combines countries only for identical type, date and note, retaining different evidence', () => {

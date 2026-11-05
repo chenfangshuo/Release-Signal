@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         发行信号 / Release Signal
 // @namespace    release-signal.local
-// @version      0.5.1
+// @version      0.5.3
 // @license      MIT
 // @description  在豆瓣影视详情页显示电影发行记录及剧集按季播出进度，作为搜索前的参考。
 // @homepageURL  https://github.com/chenfangshuo/Release-Signal
@@ -355,11 +355,12 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     return { ttl: expiresAt - entry.fetchedAt, expiresAt, fresh: at >= entry.fetchedAt && at < expiresAt };
   }
 
-  // 凭据保护：仅接受可确认的隔离环境；未知环境暂停查询和输入，不退回网页密钥表单。
-  function isIsolatedRuntime(info) {
+  // TM 的 raw/js 是管理器支持的运行模式，不等同于 @grant none。
+  // 保留 DOM 偏好，但不要求用户放开全局 DOM 模式；此检查是兼容策略，不是隔离证明。
+  function isSupportedRuntime(info) {
     return Boolean(info && (
       (info.scriptHandler === 'Violentmonkey' && info.injectInto === 'content') ||
-      (info.scriptHandler === 'Tampermonkey' && info.sandboxMode === 'dom')
+      (info.scriptHandler === 'Tampermonkey' && ['raw', 'js', 'dom'].includes(info.sandboxMode))
     ));
   }
 
@@ -560,11 +561,12 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     #release-signal-panel * {box-sizing:border-box}
     #release-signal-panel [hidden] {display:none!important}
     #release-signal-panel .rs-summary {display:flex;align-items:center;gap:7px;width:fit-content;max-width:100%;min-height:26px;padding:2px 0;list-style:none;cursor:pointer;color:#666}
-    #release-signal-panel .rs-summary::-webkit-details-marker {display:none}
+    #release-signal-panel .rs-summary::-webkit-details-marker,#release-signal-panel .rs-records > summary::-webkit-details-marker {display:none}
     #release-signal-panel .rs-summary-text {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
     #release-signal-panel .rs-dot {display:inline-block;flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:currentColor}
-    #release-signal-panel .rs-chevron {flex:0 0 5px;width:5px;height:5px;margin:0 3px 3px 1px;border-right:1px solid #999;border-bottom:1px solid #999;transform:rotate(45deg)}
-    #release-signal-panel .rs-disclosure[open] > .rs-summary .rs-chevron {transform:rotate(225deg);margin-top:4px;margin-bottom:0}
+    #release-signal-panel .rs-chevron,#release-signal-panel .rs-records > summary::after {flex:0 0 5px;width:5px;height:5px;margin:0 3px 3px 1px;border-right:1px solid #999;border-bottom:1px solid #999;transform:rotate(45deg)}
+    #release-signal-panel .rs-records > summary::after {content:""}
+    #release-signal-panel .rs-disclosure[open] > .rs-summary .rs-chevron,#release-signal-panel .rs-records[open] > summary::after {transform:rotate(225deg);margin-top:4px;margin-bottom:0}
     #release-signal-panel .rs-content {margin-top:6px;padding:10px 12px;border-left:2px solid #e0e8e2;background:#fbfcfb}
     #release-signal-panel .rs-header {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
     #release-signal-panel .rs-title {margin:0;color:#555;font-size:14px;font-weight:600}
@@ -580,14 +582,17 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     #release-signal-panel [data-status="error"],#release-signal-panel .rs-error {color:#a53126}
     #release-signal-panel .rs-summary-text[data-status="available"],#release-signal-panel .rs-content [data-status="available"] {color:#426b4f}
     #release-signal-panel .rs-summary-text[data-status="future"] {color:#80652f}
-    #release-signal-panel .rs-summary-text[data-status="unknown"],#release-signal-panel .rs-content [data-status="future"],#release-signal-panel .rs-content [data-status="unknown"] {color:#666}
+    #release-signal-panel .rs-summary-text[data-status="unknown"] {color:#666}
+    #release-signal-panel .rs-content [data-status="future"],#release-signal-panel .rs-content [data-status="unknown"],#release-signal-panel .rs-content .rs-muted {color:#888}
     #release-signal-panel .rs-summary-text[data-status="error"] {color:#8e514a}
     #release-signal-panel .rs-row {display:flex;gap:12px;margin:3px 0}
-    #release-signal-panel .rs-season-select {min-width:0;max-width:calc(100% - 100px)}
-    #release-signal-panel .rs-label {min-width:88px;font-weight:600}
+    #release-signal-panel .rs-season-select {min-width:0;max-width:calc(100% - 84px)}
+    #release-signal-panel .rs-label {flex:0 0 72px;min-width:72px;font-weight:600}
     #release-signal-panel .rs-footnote {font-size:12px;color:#666}
+    #release-signal-panel .rs-record-meta {margin:3px 0}
+    #release-signal-panel .rs-source-line {margin:3px 0 6px}
     #release-signal-panel .rs-records {margin-top:8px}
-    #release-signal-panel .rs-records > summary {color:#666;font-size:12px;cursor:pointer}
+    #release-signal-panel .rs-records > summary {display:flex;align-items:center;gap:7px;width:fit-content;max-width:100%;list-style:none;color:#666;font-size:12px;cursor:pointer}
     #release-signal-panel .rs-config-notice {font-size:12px;color:#426b4f}
     #release-signal-panel .rs-table-wrap {overflow-x:auto;margin-top:8px}
     #release-signal-panel .rs-table {border-collapse:collapse;width:100%;font-size:12px;background:transparent}
@@ -614,15 +619,17 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     if (!host) return null; // Login / security-check pages have no suitable movie content.
     const identity = extractImdb(info);
     const seasonHint = extractSeasonHint(info, doc.querySelector('#content h1')?.textContent || '');
-    const isolated = isIsolatedRuntime(gm.info);
+    const runtimeSupported = isSupportedRuntime(gm.info);
     // 清理旧版持久化的季数预览；重新加载必须回到当前豆瓣条目，公共分季缓存仍可复用。
-    if (isolated) {
+    if (runtimeSupported) {
       try { if (gm.get('releaseSignal.seasons.v1', null) !== null) gm.delete('releaseSignal.seasons.v1'); }
       catch { /* Old preferences are ignored even if their removal fails. */ }
     }
-    const isolationProblem = '当前管理器未提供所需的隔离环境，已暂停凭据操作与查询。推荐使用暴力猴；篡改猴默认配置暂不兼容。';
-    // 在已确认的隔离世界中捕获原生输入方法，密钥不经过网页 DOM，也不回填旧值。
-    const privatePrompt = isolated && typeof win.prompt === 'function' ? win.prompt.bind(win) : null;
+    const runtimeProblem = '无法识别当前管理器的运行模式。请更新暴力猴或篡改猴后重试，可在“关于”中查看运行信息；无需修改全局沙盒设置。';
+    const promptProblem = '当前环境无法打开凭据输入窗口，请重新加载页面或更新脚本管理器。已有凭据仍可用于查询。';
+    // 使用入口捕获的管理器全局输入方法，不能改取共享窗口的 win.prompt。
+    // raw/js 模式仍依赖管理器封装，不能声称与浏览器独立 JS 世界有同等隔离。
+    const credentialPrompt = runtimeSupported && typeof gm.prompt === 'function' ? gm.prompt : null;
     const request = createRequester(gm.request);
     const service = createService({ request: (path, credential, signal) => {
       synchronizeConfig(true);
@@ -631,7 +638,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     }, storage: gm, now });
     let config = null, configReadFailed = false;
     try {
-      const stored = isolated ? gm.get(CONFIG_KEY, null) : null;
+      const stored = runtimeSupported ? gm.get(CONFIG_KEY, null) : null;
       if (stored) config = parseConfig(stored.mode, stored.value, stored.apiOrigin);
     } catch { configReadFailed = true; }
     let phase = 'idle', data = null, failure = null, uiGeneration = 0, midnightTimer, dialog = null, validationController = null, configNotice = '', configListener = null;
@@ -691,7 +698,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       rows[kind] = value;
       content.append(row);
     }
-    const meta = node('p', 'rs-footnote'), details = node('details', 'rs-records'), recordsTitle = node('summary', '', '全部发行记录');
+    const meta = node('p', 'rs-footnote rs-record-meta'), details = node('details', 'rs-records'), recordsTitle = node('summary', '', '全部发行记录');
     const detailBody = node('div');
     details.append(recordsTitle, detailBody);
     content.append(details);
@@ -709,7 +716,11 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         overall = state.status;
         text = { available: '已有发行记录', future: '等待发行', unknown: '暂未查到发行记录' }[overall];
         compactText = text;
-        if (overall === 'future') compactText += ' · ' + [state.digital.date, state.physical.date].filter(Boolean).sort()[0];
+        // 收起时显示当前状态对应的最早日期，不把另一类的未来日期当作已发行依据。
+        if (overall === 'available' || overall === 'future') {
+          const earliest = [state.digital, state.physical].filter(part => part.status === overall && part.date).map(part => part.date).sort()[0];
+          if (earliest) compactText += ' · ' + earliest;
+        }
         renderDetails(normalized, data.result.work);
       } else if (tv) {
         state = deriveTvStatus(data.result.series, data.result.season, localDay(now()));
@@ -721,8 +732,8 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         detailBody.replaceChildren();
         recordsTitle.textContent = '全部发行记录';
       }
-      if (!isolated) {
-        text = isolationProblem;
+      if (!runtimeSupported) {
+        text = runtimeProblem;
         compactText = '当前环境不受支持';
       } else if (identity.kind !== 'found') {
         text = identity.message;
@@ -761,7 +772,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         }
         seasonSelect.replaceChildren(...options);
         seasonSelect.value = data.result.seasonNumber === null ? '' : String(data.result.seasonNumber);
-        seasonSelect.disabled = !config || !isolated;
+        seasonSelect.disabled = !config || !runtimeSupported;
       }
       configFeedback.textContent = configNotice;
       configFeedback.hidden = !configNotice;
@@ -788,8 +799,8 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         !cachePolicy(data, now()).fresh ? '缓存已过期，请刷新' : '',
         failure ? '旧数据：本次刷新未成功' : '',
         data.cacheWarning ? '缓存未能保存，当前结果仍可查看' : '',
-      ].filter(Boolean).join(' · ') : '数据来源：TMDB；仅查看公开发行日期记录。';
-      refreshButton.disabled = !isolated || phase === 'loading' || !config || identity.kind !== 'found';
+      ].filter(Boolean).join(' · ') + ' · 结果仅供参考' : '数据来源：TMDB；仅查看公开发行日期记录。';
+      refreshButton.disabled = !runtimeSupported || phase === 'loading' || !config || identity.kind !== 'found';
       panel.setAttribute('aria-busy', String(phase === 'loading'));
     }
 
@@ -811,8 +822,8 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const season = result.season, work = result.work;
       const source = 'https://www.themoviedb.org/tv/' + work.id + (season ? '/season/' + season.season_number : '');
       recordsTitle.textContent = '全部播出记录' + (season ? '（' + season.episodes.length + ' 集）' : '');
-      const sourceLine = node('p'); sourceLine.append(link('TMDB：' + work.title + (season ? ' · 第 ' + season.season_number + ' 季' : ''), source));
-      detailBody.append(meta, node('p', 'rs-footnote', '结果仅供参考'), sourceLine);
+      const sourceLine = node('p', 'rs-source-line'); sourceLine.append(link('TMDB：' + work.title + (season ? ' · 第 ' + season.season_number + ' 季' : ''), source));
+      detailBody.append(meta, sourceLine);
       if (work.sourceEpisode !== undefined) detailBody.append(node('p', 'rs-footnote', '匹配依据：IMDb 对应 ' + episodeCode({ season_number: work.sourceSeason, episode_number: work.sourceEpisode }) + '，已通过所属剧集与季号定位；以下显示当前所选季的记录。'));
       if (!season) { detailBody.append(node('p', 'rs-muted', '确认季数后查看单集播出记录。')); return; }
       if (state.complete) detailBody.append(node('p', 'rs-footnote', '完结依据：TMDB 标注 ' + episodeCode(season.episodes.at(-1)) + ' 为季终集，且当季集数完整、所有集的日期均已到。'));
@@ -838,9 +849,9 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const grouped = groupReleaseRecords(normalized.records);
       recordsTitle.textContent = '全部发行记录（' + grouped.length + ' 组）';
       const source = 'https://www.themoviedb.org/movie/' + work.id + '/releases';
-      const sourceLine = node('p');
+      const sourceLine = node('p', 'rs-source-line');
       sourceLine.append(link('TMDB：' + work.title, source));
-      detailBody.append(meta, node('p', 'rs-footnote', '结果仅供参考'), sourceLine);
+      detailBody.append(meta, sourceLine);
       if (normalized.invalidCount) detailBody.append(node('p', 'rs-error', '记录不完整：已忽略 ' + normalized.invalidCount + ' 项无效日期或异常记录。'));
       if (!normalized.records.length) {
         detailBody.append(node('p', 'rs-muted', '没有可用于判断的 Digital / Physical 日期；不代表没有片源。'));
@@ -871,7 +882,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
 
     async function load(force = false) {
       synchronizeConfig(true);
-      if (!isolated || !config || identity.kind !== 'found' || phase === 'loading') { render(); return; }
+      if (!runtimeSupported || !config || identity.kind !== 'found' || phase === 'loading') { render(); return; }
       const current = uiGeneration;
       data = data || service.peek(identity.id, seasonOptions());
       failure = null; phase = 'loading'; render();
@@ -935,13 +946,19 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       }
       apiSelect.value = config?.apiOrigin || API_ORIGIN;
       const apiLabel = node('label', '', 'API 地址'); apiLabel.htmlFor = apiSelect.id;
-      const help = node('p', 'rs-footnote', (config ? '已保存凭据，不回填原值。“保存并查询”沿用现有凭据；更换时点击“替换凭据”。' : '使用你自己的 TMDB 凭据，点击“保存并查询”后在浏览器原生对话框填写。') +
+      const help = node('p', 'rs-footnote', (config ? '已保存凭据，不回填原值。“保存并查询”沿用现有凭据；更换时点击“替换凭据”。' : '使用你自己的 TMDB 凭据，点击“设置并查询”后在浏览器原生对话框填写。') +
         '默认地址连接失败时，可选择备用地址。切换凭据类型时也需重新填写；页面中不创建密钥输入框。');
       const errorLine = node('p', 'rs-error'); errorLine.setAttribute('role', 'alert');
       const controls = node('div', 'rs-actions');
-      const save = node('button', 'rs-button', '保存并查询'); save.type = 'submit';
+      const save = node('button', 'rs-button', config ? '保存并查询' : '设置并查询'); save.type = 'submit';
       const replace = node('button', 'rs-button', '替换凭据'); replace.type = 'submit'; replace.hidden = !config;
-      if (!privatePrompt) { save.disabled = true; errorLine.textContent = isolationProblem; }
+      if (!runtimeSupported) {
+        save.disabled = true; replace.disabled = true; errorLine.textContent = runtimeProblem;
+      } else if (!credentialPrompt) {
+        replace.disabled = true;
+        save.disabled = !config;
+        errorLine.textContent = promptProblem;
+      }
       const remove = button('删除凭据', () => {
         try { gm.delete(CONFIG_KEY); }
         catch { errorLine.textContent = '删除失败，请检查管理器存储权限。'; return; }
@@ -953,7 +970,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       form.append(help, link('打开 TMDB API 设置', 'https://www.themoviedb.org/settings/api'), modeLabel, mode, apiLabel, apiSelect, errorLine, controls);
       form.addEventListener('submit', async event => {
         event.preventDefault();
-        if (!privatePrompt || validationController || synchronizeConfig(true)) return;
+        if (!runtimeSupported || validationController || synchronizeConfig(true)) return;
         let next;
         try {
           const selectedMode = mode.value;
@@ -962,7 +979,8 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
           if (config && selectedMode === config.mode && event.submitter !== replace) {
             next = parseConfig(selectedMode, config.value, selectedOrigin);
           } else {
-            const value = privatePrompt('发行信号：填写新的 TMDB ' + (selectedMode === 'token' ? 'API Read Access Token' : 'API key') +
+            if (!credentialPrompt) throw new SignalError('config', promptProblem);
+            const value = credentialPrompt('发行信号：填写新的 TMDB ' + (selectedMode === 'token' ? 'API Read Access Token' : 'API key') +
               '，将用于 ' + new URL(selectedOrigin).hostname + '。取消将保留原设置。', '');
             if (value === null || synchronizeConfig(true)) return;
             next = parseConfig(selectedMode, value, selectedOrigin);
@@ -988,7 +1006,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         } finally {
           if (validationController === controller) {
             validationController = null;
-            save.disabled = false; replace.disabled = false; remove.disabled = !config && !configReadFailed; mode.disabled = false; apiSelect.disabled = false;
+            save.disabled = !credentialPrompt && !config; replace.disabled = !credentialPrompt; remove.disabled = !config && !configReadFailed; mode.disabled = false; apiSelect.disabled = false;
           }
         }
       });
@@ -997,7 +1015,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
 
     function synchronizeConfig(notify = false) {
       // 存储事件可能延迟或乱序，始终重读管理器存储；请求前和结果返回后也走同一检查。
-      if (!isolated) return false;
+      if (!runtimeSupported) return false;
       let latest = null, readFailed = false;
       try {
         const stored = gm.get(CONFIG_KEY, null);
@@ -1022,7 +1040,10 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const logoLink = link('', 'https://www.themoviedb.org');
       const logo = node('img', 'rs-logo'); logo.alt = 'TMDB'; logo.src = TMDB_LOGO;
       logoLink.append(logo);
-      element.append(node('p', '', '发行信号 0.5.1 · 以公开记录作为搜索前的参考。'), logoLink,
+      element.append(node('p', '', '发行信号 0.5.3 · 以公开记录作为搜索前的参考。'), logoLink,
+        // 仅展示诊断需要的非敏感字段；不输出完整 GM_info、配置、请求或凭据。
+        node('p', 'rs-footnote rs-runtime', '管理器：' + String(gm.info?.scriptHandler || '未知').slice(0, 80) + ' ' + String(gm.info?.version || '未知版本').slice(0, 40) +
+          ' · 运行模式：' + String(gm.info?.sandboxMode || gm.info?.injectInto || '未知').slice(0, 40)),
         node('p', '', 'This product uses the TMDB API but is not endorsed or certified by TMDB.'),
         node('p', 'rs-footnote', '本产品使用 TMDB API，但未获 TMDB 背书或认证。记录可能缺失或有误，计划日期已过也不代表已经核实实际上线。'),
         link('TMDB 数据与署名说明', 'https://developer.themoviedb.org/docs/faq'),
@@ -1053,7 +1074,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       catch { failure = new SignalError('storage', '清空缓存失败，请检查管理器存储权限。'); render(); return; }
       resetQueries(); data = null; void load(true);
     });
-    if (isolated) {
+    if (runtimeSupported) {
       try { configListener = gm.watch(CONFIG_KEY, (_key, _old, _next, remote) => { if (remote && synchronizeConfig(true)) render(); }); }
       catch { /* Requests and visibility changes still re-read the storage. */ }
     }
@@ -1064,12 +1085,14 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
   // Node-only exports let tests exercise the installed file itself, with no build
   // or browser globals exposed by the production userscript.
   if (typeof module === 'object' && module.exports && typeof window === 'undefined') {
-    module.exports = { CONFIG_KEY, CACHE_KEY, API_ORIGINS, CACHE_TTL, CACHE_SHORT_TTL, CACHE_LONG_TTL, CACHE_LIMIT, REQUEST_TIMEOUT, SignalError, isSubjectUrl, extractImdb, extractSeasonHint, matchWork, sourceDate, localDay, normalizeReleases, normalizeSeries, normalizeSeason, resolveSeason, groupReleaseRecords, deriveStatus, deriveTvStatus, cachePolicy, isIsolatedRuntime, parseConfig, createRequester, verifyCredential, createService };
+    module.exports = { CONFIG_KEY, CACHE_KEY, API_ORIGINS, CACHE_TTL, CACHE_SHORT_TTL, CACHE_LONG_TTL, CACHE_LIMIT, REQUEST_TIMEOUT, SignalError, isSubjectUrl, extractImdb, extractSeasonHint, matchWork, sourceDate, localDay, normalizeReleases, normalizeSeries, normalizeSeason, resolveSeason, groupReleaseRecords, deriveStatus, deriveTvStatus, cachePolicy, isSupportedRuntime, parseConfig, createRequester, verifyCredential, createService };
     return;
   }
   if (typeof window === 'undefined' || typeof GM_getValue !== 'function') return;
   createApp({ win: window, doc: document, gm: {
     info: typeof GM_info === 'object' ? GM_info : null,
+    // TM 的全局 prompt 可由管理器保护；window.prompt 可能已被网页替换。
+    prompt: typeof prompt === 'function' ? prompt.bind(window) : null,
     get: (key, fallback) => GM_getValue(key, fallback),
     set: (key, value) => GM_setValue(key, value),
     delete: key => GM_deleteValue(key),

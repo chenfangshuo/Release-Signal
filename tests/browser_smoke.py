@@ -73,7 +73,9 @@ MOCK = r"""
     storage: options.storage, plans: options.plans, requests: [], menus: {},
     aborts: 0, setError: false, getError: false, listeners: {}, suppressListeners: false,
   };
-  window.GM_info = options.info ?? {scriptHandler: 'Tampermonkey', sandboxMode: 'dom'};
+  // Exercise the formerly blocked TM fallback throughout the main UI suite.
+  // This mock does not reproduce Tampermonkey's actual window wrapper.
+  window.GM_info = options.info ?? {scriptHandler: 'Tampermonkey', version: 'fixture-version', sandboxMode: 'raw'};
   // A fake manager bus, only for test values; production uses GM storage events.
   const channel = options.broadcast === false ? null : new BroadcastChannel('release-signal-test-manager');
   m.remoteChange = ({key, value, deleted}) => {
@@ -204,7 +206,7 @@ class BrowserSmoke(unittest.TestCase):
                 dialog.accept(value)
         panel.page.once('dialog', on_prompt)
         replacement = panel.get_by_role('button', name='替换凭据', exact=True)
-        (replacement if replacement.is_visible() else panel.get_by_role('button', name='保存并查询', exact=True)).click()
+        (replacement if replacement.is_visible() else panel.get_by_role('button', name='设置并查询', exact=True)).click()
 
     def another_tab(self, plans=(), **options):
         first = self.page
@@ -225,7 +227,7 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator('[data-kind="digital"]')).to_have_text("已发行 · 2026-11-04")
         expect(panel.locator('[data-kind="physical"]')).to_have_text("预计 · 2026-11-20")
         self.assertTrue(self.page.evaluate("document.querySelector('#info').nextElementSibling.id === 'release-signal-panel'"))
-        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录")
+        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录 · 2026-11-04")
         expect(panel.locator(".rs-content")).to_be_hidden()
         expect(panel.get_by_role("button", name="设置 TMDB", exact=True)).to_be_hidden()
         self.assertLessEqual(panel.bounding_box()["height"], 28)
@@ -237,6 +239,8 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator("tbody")).to_be_hidden()
         panel.screenshot(path=str(self.artifacts / "panel-summary.png"))
         self.open_records(panel)
+        expect(panel.locator('.rs-record-meta')).to_contain_text('结果仅供参考')
+        expect(panel.locator('.rs-record-meta + .rs-source-line')).to_have_count(1)
         expect(panel.locator("tbody tr")).to_have_count(2)
         expect(panel.locator("tbody")).to_contain_text("加拿大 (CA)、美国 (US)")
         self.assertEqual(panel.locator("tbody a").first.get_attribute("href"), "https://www.themoviedb.org/movie/42/releases")
@@ -374,7 +378,7 @@ class BrowserSmoke(unittest.TestCase):
         self.assertEqual(panel.locator(".rs-dot").evaluate("el => getComputedStyle(el).backgroundColor"), "rgb(128, 91, 11)")
         self.page.clock.fast_forward(62000)
         expect(panel.locator(".rs-status")).to_contain_text("已有发行记录")
-        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录")
+        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录 · 2026-11-06")
         expect(panel.locator(".rs-content")).to_be_hidden()
         self.assertEqual(self.requests(), [])
         self.page.clock.set_fixed_time(datetime(2026, 11, 7, 4, 0, tzinfo=timezone.utc))
@@ -436,7 +440,7 @@ class BrowserSmoke(unittest.TestCase):
 
     def test_15_wrong_replacement_is_verified_even_with_fresh_cache_and_preserves_old_settings(self):
         panel = self.start([response(finding()), response(releases(record(4, "2020-01-01")))])
-        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录")
+        expect(panel.locator(".rs-summary-text")).to_have_text("已有发行记录 · 2020-01-01")
         before = self.page.evaluate(f"window.__rsMock.storage[{json.dumps(CACHE_KEY)}]")
         self.open_settings(panel)
         self.page.evaluate("window.__rsMock.plans.push({status: 401, body: {}})")
@@ -484,7 +488,7 @@ class BrowserSmoke(unittest.TestCase):
 
     def test_19_other_tab_replacement_is_used_for_next_refresh(self):
         panel = self.start([response(finding(movie_results=[]))], cache=cached_movie())
-        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2020-01-01')
         other, other_panel = self.another_tab([response({'success': True}), response(finding(movie_results=[]))], cache=cached_movie())
         self.open_settings(other_panel)
         self.submit_credential(other_panel, 'replacement-fixture-token')
@@ -528,13 +532,12 @@ class BrowserSmoke(unittest.TestCase):
         self.assertEqual(self.requests(), [])
         self.assertEqual(self.page.evaluate(f"window.__rsMock.storage[{json.dumps(CONFIG_KEY)}]"), TOKEN)
 
-    def test_23_page_context_fallback_refuses_credentials_and_requests(self):
-        panel = self.start(info={'scriptHandler': 'Tampermonkey', 'sandboxMode': 'raw'})
+    def test_23_unknown_runtime_refuses_credentials_and_requests(self):
+        panel = self.start(info={'scriptHandler': 'Tampermonkey', 'sandboxMode': 'unknown'})
         expect(panel.locator('.rs-summary-text')).to_have_text('当前环境不受支持')
-        expect(panel.locator('.rs-status')).to_contain_text('推荐使用暴力猴')
-        expect(panel.locator('.rs-status')).not_to_contain_text('启用暴力猴 content 或油猴 DOM')
+        expect(panel.locator('.rs-status')).to_contain_text('无需修改全局沙盒设置')
         self.open_settings(panel)
-        expect(panel.get_by_role('button', name='保存并查询')).to_be_disabled()
+        expect(panel.get_by_role('button', name='设置并查询')).to_be_disabled()
         expect(panel.get_by_role('dialog').locator('input')).to_have_count(0)
         self.assertEqual(self.requests(), [])
 
@@ -575,6 +578,95 @@ class BrowserSmoke(unittest.TestCase):
         self.assertFalse(self.page.evaluate("'__rsMock' in window"))
         self.assertEqual(panel.locator('input,textarea').count(), 0)
         cdp.detach()
+
+    def test_47_tampermonkey_js_mode_can_save_and_query(self):
+        panel = self.start([response({'success': True}), response(finding()), response(releases(record(4, '2026-11-04')))],
+                           config=None, info={'scriptHandler': 'Tampermonkey', 'sandboxMode': 'js'})
+        expect(panel.locator('.rs-summary-text')).to_have_text('请设置 TMDB')
+        self.open_settings(panel)
+        self.submit_credential(panel, 'fixture-js-token')
+        expect(panel.get_by_role('dialog')).to_have_count(0)
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2026-11-04')
+        self.assertEqual(len(self.requests()), 3)
+        self.assertTrue(all(item['headers']['Authorization'] == 'Bearer fixture-js-token' for item in self.requests()))
+
+    def test_48_missing_prompt_does_not_disable_saved_credentials_or_address_switch(self):
+        panel = self.start([response({'success': True}), response(finding()), response(releases())],
+                           cache=cached_movie(), html_change='window.prompt = undefined')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2020-01-01')
+        self.open_settings(panel)
+        expect(panel.get_by_role('button', name='替换凭据', exact=True)).to_be_disabled()
+        expect(panel.get_by_role('button', name='保存并查询', exact=True)).to_be_enabled()
+        panel.locator('#release-signal-auth-mode').select_option('key')
+        panel.get_by_role('button', name='保存并查询', exact=True).click()
+        expect(panel.get_by_role('alert')).to_contain_text('无法打开凭据输入窗口')
+        self.assertEqual(self.requests(), [])
+        panel.locator('#release-signal-auth-mode').select_option('token')
+        panel.locator('#release-signal-api-origin').select_option('https://api.themoviedb.org')
+        panel.get_by_role('button', name='保存并查询', exact=True).click()
+        expect(panel.get_by_role('dialog')).to_have_count(0)
+        expect(panel.locator('.rs-summary-text')).to_have_text('暂未查到发行记录')
+        self.assertEqual(len(self.requests()), 3)
+        self.assertTrue(all(item['url'].startswith('https://api.themoviedb.org/3/') for item in self.requests()))
+        self.assertEqual(self.page.evaluate(f'window.__rsMock.storage[{json.dumps(CONFIG_KEY)}].value'), TOKEN['value'])
+
+    def test_49_about_only_displays_allowlisted_runtime_fields_as_text(self):
+        info = {'scriptHandler': 'Tampermonkey', 'version': '<img src=x onerror=alert(1)>', 'sandboxMode': 'raw',
+                'scriptMetaStr': 'private-fixture-metadata', 'script': {'options': {'private': 'private-fixture-options'}}}
+        panel = self.start(cache=cached_movie(), info=info)
+        self.expand(panel)
+        panel.get_by_role('button', name='关于', exact=True).click()
+        runtime = panel.locator('.rs-runtime')
+        expect(runtime).to_contain_text('Tampermonkey')
+        expect(runtime).to_contain_text('<img src=x onerror=alert(1)>')
+        expect(runtime).to_contain_text('运行模式：raw')
+        expect(runtime.locator('img')).to_have_count(0)
+        text = panel.get_by_role('dialog').text_content()
+        for secret in [TOKEN['value'], 'private-fixture-metadata', 'private-fixture-options']:
+            self.assertNotIn(secret, text)
+
+    def test_50_credential_prompt_is_captured_before_later_window_overrides(self):
+        # Demonstrates startup capture only, not isolation from earlier page code.
+        panel = self.start([response({'success': True}), response(finding(movie_results=[]))], config=None)
+        self.page.evaluate("() => { window.__promptOverrideCalls=0; window.prompt=()=>{window.__promptOverrideCalls++;return 'stolen'}; }")
+        self.open_settings(panel)
+        self.submit_credential(panel, 'fixture-captured-prompt-token')
+        expect(panel.get_by_role('dialog')).to_have_count(0)
+        self.assertEqual(self.page.evaluate('window.__promptOverrideCalls'), 0)
+        self.assertEqual(self.page.evaluate(f'window.__rsMock.storage[{json.dumps(CONFIG_KEY)}].value'), 'fixture-captured-prompt-token')
+        expect(panel.locator('input,textarea')).to_have_count(0)
+
+    def test_51_manager_scoped_prompt_is_used_instead_of_the_shared_window_prompt(self):
+        # Model the manager's scoped global separately from the shared window.
+        # This guards the entry-point lookup; actual manager security is a separate test.
+        options = {'storage': {}, 'plans': [response({'success': True}), response(finding(movie_results=[]))]}
+        self.page.add_init_script(MOCK.replace('__OPTIONS__', json.dumps(options, ensure_ascii=False)))
+        self.page.goto('https://movie.douban.com/subject/1292052/')
+        self.page.evaluate("() => { const prompt = window.prompt; window.__pagePromptCalls=0; window.prompt=()=>{window.__pagePromptCalls++;return 'host-value'}; " + SCRIPT + "\n}")
+        panel = self.page.locator('#release-signal-panel')
+        self.open_settings(panel)
+        self.submit_credential(panel, 'fixture-manager-scoped-token')
+        expect(panel.get_by_role('dialog')).to_have_count(0)
+        self.assertEqual(self.page.evaluate('window.__pagePromptCalls'), 0)
+        self.assertEqual(self.page.evaluate(f'window.__rsMock.storage[{json.dumps(CONFIG_KEY)}].value'), 'fixture-manager-scoped-token')
+        expect(panel.locator('input,textarea')).to_have_count(0)
+
+    def test_52_movie_compact_date_uses_the_earliest_record_for_the_current_status(self):
+        cases = [
+            ([record(4, '2026-11-04'), record(5, '2026-11-01')], '已有发行记录 · 2026-11-01'),
+            ([record(5, '2026-11-04')], '已有发行记录 · 2026-11-04'),
+            ([record(4, '2026-12-01'), record(5, '2026-11-01')], '已有发行记录 · 2026-11-01'),
+            ([record(4, '2026-11-05'), record(5, '2026-02-30')], '已有发行记录 · 2026-11-05'),
+            ([record(4, '2026-12-01'), record(5, '2026-11-20')], '等待发行 · 2026-11-20'),
+            ([record(3, '2020-01-01')], '暂未查到发行记录'),
+            ([], '暂未查到发行记录'),
+        ]
+        for records, expected in cases:
+            with self.subTest(expected=expected, records=records):
+                page, panel = self.another_tab([response(finding()), response(releases(*records))])
+                expect(panel.locator('.rs-summary-text')).to_have_text(expected)
+                expect(panel.locator('.rs-content')).to_be_hidden()
+                page.close()
 
     def test_25_tv_season_hint_shows_latest_and_next_with_two_level_details(self):
         data = tv_season(tv_episode(1, '2026-11-04'), tv_episode(2, '2026-11-11', 'finale'))
@@ -815,7 +907,7 @@ class BrowserSmoke(unittest.TestCase):
     def test_41_switch_api_address_reuses_saved_credential_without_a_prompt(self):
         panel = self.start([response({'success': True}), response(finding()), response(releases(record(4, '2026-11-01')))],
                            cache=cached_movie(), config={**TOKEN, 'apiOrigin': 'https://api.themoviedb.org'})
-        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2020-01-01')
         prompts = []
         self.page.on('dialog', lambda dialog: (prompts.append(dialog.type), dialog.dismiss()))
         self.open_settings(panel)
@@ -823,7 +915,7 @@ class BrowserSmoke(unittest.TestCase):
         panel.locator('#release-signal-api-origin').select_option('https://api.tmdb.org')
         panel.get_by_role('button', name='保存并查询', exact=True).click()
         expect(panel.get_by_role('dialog')).to_have_count(0)
-        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2026-11-01')
         self.assertEqual(prompts, [])
         self.assertEqual(len(self.requests()), 3)
         self.assertTrue(all(item['url'].startswith('https://api.tmdb.org/3/') for item in self.requests()))
@@ -835,7 +927,7 @@ class BrowserSmoke(unittest.TestCase):
     def test_42_failed_api_address_validation_keeps_original_config_and_cache(self):
         saved = {**TOKEN, 'apiOrigin': 'https://api.themoviedb.org'}
         panel = self.start([response({}, status=401)], cache=cached_movie(), config=saved)
-        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2020-01-01')
         before = self.page.evaluate(f'window.__rsMock.storage[{json.dumps(CACHE_KEY)}]')
         self.open_settings(panel)
         panel.locator('#release-signal-api-origin').select_option('https://api.tmdb.org')
@@ -863,7 +955,7 @@ class BrowserSmoke(unittest.TestCase):
         self.page.evaluate('plans => window.__rsMock.plans.push(...plans)', [response(finding()), response(releases(record(4, '2026-11-01')))])
         self.expand(panel)
         panel.get_by_role('button', name='刷新', exact=True).click()
-        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2026-11-01')
         self.assertTrue(all(item['url'].startswith('https://api.tmdb.org/3/') for item in self.requests()[1:]))
 
     def test_44_new_and_replacement_credentials_use_the_default_origin_without_selection(self):
