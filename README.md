@@ -29,12 +29,9 @@
 可使用 **暴力猴（Violentmonkey）** 或 **篡改猴（Tampermonkey）**，两者均已有电影与剧集实机验证。篡改猴的沙盒设置保持“默认”即可。
 
 1. 从[暴力猴官网](https://violentmonkey.github.io/get-it/)或[篡改猴官网](https://www.tampermonkey.net/)安装适合你浏览器的扩展。
-2. 点击[安装发行信号](https://raw.githubusercontent.com/chenfangshuo/Release-Signal/main/release-signal.user.js)，在脚本管理器页面中确认安装。若浏览器提示需要允许用户脚本，按扩展指引开启。
-3. 若链接无法打开，或只显示代码，可从 [Releases](https://github.com/chenfangshuo/Release-Signal/releases) 下载 `release-signal.user.js`，用文本编辑器打开并复制完整代码；在脚本管理器中“新建脚本”，替换全部内容并保存。
-4. 注册或登录 TMDB，打开 [API 设置](https://www.themoviedb.org/settings/api)，按页面指引申请 API 使用权限，复制 **API Read Access Token**。
-5. 打开一个[豆瓣电影详情页](https://movie.douban.com/subject/1292052/)，点击发行状态行 →“设置 TMDB”，保留默认的 Token 类型，点击“设置并查询”，在弹出的浏览器输入框中粘贴 Token。验证成功后就会自动查询。
-
-已有 **API key（v3）** 的用户，也可以在设置中切换类型后填写。两种凭据选一种即可。
+2. 点击[安装发行信号](https://raw.githubusercontent.com/chenfangshuo/Release-Signal/main/release-signal.user.js)，确认安装，并按浏览器提示允许用户脚本。若链接打不开或只显示代码，可从 [Releases](https://github.com/chenfangshuo/Release-Signal/releases) 下载 `release-signal.user.js`，用文本编辑器打开并复制完整代码，在脚本管理器中“新建脚本”，替换全部内容后保存。
+3. 注册或登录 TMDB，打开 [API 设置](https://www.themoviedb.org/settings/api)，按指引申请 API 使用权限，复制 **API Read Access Token**。
+4. 打开[豆瓣电影详情页](https://movie.douban.com/subject/1292052/)，点击发行状态行 →“设置 TMDB”，保留默认的 Token 类型，点击“设置并查询”，在弹出的输入框中粘贴 Token，验证成功后会自动查询。已有 **API key（v3）** 也可切换类型后使用，两种凭据选一种即可。
 
 更新时可在脚本管理器中检查脚本更新，也可重新点击安装链接。手动复制代码安装的旧版，可编辑原脚本、替换完整代码并保存。更新后刷新豆瓣页面；原有凭据和已保存的 API 地址会保留。
 
