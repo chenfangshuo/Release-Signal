@@ -56,6 +56,56 @@ test('a complete known season with a final episode flag turns green at the calen
   assert.equal(completed.text, '本季完结 · 2 集');
 });
 
+test('season premiere dates cannot fall after an episode when confirming completion, including cached data', () => {
+  for (const [catalogDate, detailDate] of [
+    ['2027-01-01', '2027-01-01'], ['2027-01-01', '2026-11-01'],
+    ['2026-11-01', '2027-01-01'], ['2026-11-03', '2026-11-03'],
+    [null, '2027-01-01'], ['2027-01-01', null],
+  ]) {
+    const catalog = series(); catalog.seasons[1].air_date = catalogDate;
+    const show = rs.normalizeSeries(catalog, 55);
+    const data = season(episode(1, '2026-11-01'), episode(2, '2026-11-04', 'finale'));
+    data.air_date = detailDate;
+    const normalized = rs.normalizeSeason(data, show, 2);
+    for (const current of [normalized, rs.normalizeSeason(normalized, show, 2)]) {
+      for (const today of ['2026-11-05', '2027-02-01']) {
+        const result = rs.deriveTvStatus(show, current, today);
+        assert.equal(result.premiereConflict, true, JSON.stringify([catalogDate, detailDate]));
+        assert.equal(result.complete, false);
+        assert.equal(result.status, 'available');
+        assert.equal(result.text, '已有播出记录 · 第 2 集');
+      }
+    }
+  }
+  for (const start of ['2026-10-30', '2026-11-01', null]) {
+    const catalog = series(); catalog.seasons[1].air_date = start;
+    const data = season(episode(1, '2026-11-01'), episode(2, '2026-11-04', 'finale'));
+    data.air_date = start;
+    assert.equal(state(data, catalog).complete, true);
+    assert.equal(state(data, catalog).premiereConflict, false);
+  }
+  const future = state(season(episode(1, '2026-11-11'), episode(2, '2026-11-18', 'finale')));
+  assert.equal(future.premiereConflict, false);
+  assert.equal(future.text, '预计开播 · 2026-11-11');
+});
+
+test('contradictory premiere dates shorten a previously completed season cache to six hours', () => {
+  const at = new Date(2026, 10, 5, 12).getTime();
+  const catalog = series(); catalog.seasons[1].air_date = '2027-01-01';
+  const show = rs.normalizeSeries(catalog, 55);
+  const data = rs.normalizeSeason(season(episode(1, '2026-09-01'), episode(2, '2026-09-02', 'finale')), show, 2);
+  const storage = memory();
+  storage.data[rs.CACHE_KEY] = { version: 1, entries: { 'tt1234567:s2': {
+    fetchedAt: at, expiresAt: at + rs.CACHE_LONG_TTL,
+    result: { work: { kind: 'tv', id: 55, title: '测试' }, series: show, seasonNumber: 2, season: data },
+  } } };
+  const service = rs.createService({ storage, now: () => at + rs.CACHE_SHORT_TTL, request: async () => { throw Error('unexpected request'); } });
+  const cached = service.peek('tt1234567', { seasonNumber: 2 });
+  assert.equal(cached.expiresAt, at + rs.CACHE_SHORT_TTL);
+  assert.equal(cached.fresh, false);
+  assert.equal(rs.deriveTvStatus(cached.result.series, cached.result.season, '2026-11-05').complete, false);
+});
+
 test('all-past dates, Ended/Canceled or missing next episode alone never establish completion', () => {
   for (const status of ['Ended', 'Canceled', 'Returning Series']) {
     const show = { ...series(), status, next_episode_to_air: null };

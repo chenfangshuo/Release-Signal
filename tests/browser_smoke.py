@@ -243,7 +243,9 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator('.rs-record-meta + .rs-source-line')).to_have_count(1)
         expect(panel.locator("tbody tr")).to_have_count(2)
         expect(panel.locator("tbody")).to_contain_text("加拿大 (CA)、美国 (US)")
-        self.assertEqual(panel.locator("tbody a").first.get_attribute("href"), "https://www.themoviedb.org/movie/42/releases")
+        expect(panel.locator("tbody a")).to_have_count(0)
+        expect(panel.locator("thead th").nth(1)).to_have_text("日期")
+        self.assertEqual(panel.locator(".rs-source-line a").get_attribute("href"), "https://www.themoviedb.org/movie/42/releases")
         panel.screenshot(path=str(self.artifacts / "panel-desktop.png"))
         panel.get_by_role("button", name="关于", exact=True).click()
         expect(panel.get_by_role("dialog")).to_contain_text("not endorsed or certified by TMDB")
@@ -712,8 +714,13 @@ class BrowserSmoke(unittest.TestCase):
                             response(tv_finding()), response(tv_series()), response(second)], html_change=title)
         expect(panel.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 1 集')
         self.expand(panel)
+        panel.locator('#release-signal-season').select_option('1')
+        expect(panel.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 1 集')
         panel.locator('#release-signal-season').select_option('2')
-        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 本季完结 · 2 集')
+        panel.locator('.rs-summary').click()
+        expect(panel.locator('.rs-content')).to_be_hidden()
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 本季完结 · 2 集')
         storage = self.page.evaluate('window.__rsMock.storage')
         self.assertNotIn(SEASONS_KEY, storage)
         old = {'version': 1, 'entries': {'1292052': {'imdb': 'tt0111161', 'number': 2, 'updatedAt': 1}}}
@@ -746,7 +753,7 @@ class BrowserSmoke(unittest.TestCase):
         panel.locator('#release-signal-season').select_option('2')
         self.page.wait_for_function("window.__rsMock.requests.some(item => item.url.includes('/season/2'))")
         panel.locator('#release-signal-season').select_option('1')
-        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 1 季 · 本季完结 · 2 集')
         self.page.wait_for_timeout(500)
         expect(panel.locator('#release-signal-season')).to_have_value('1')
         expect(panel.locator('[data-kind="recent"]')).to_have_text('S01E02 · 2026-11-04')
@@ -830,7 +837,7 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 1 集')
         self.expand(panel)
         panel.locator('#release-signal-season').select_option('1')
-        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 1 季 · 本季完结 · 2 集')
         panel.locator('#release-signal-season').select_option('')
         expect(panel.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 1 集')
         expect(panel.locator('#release-signal-season')).to_have_value('2')
@@ -845,7 +852,7 @@ class BrowserSmoke(unittest.TestCase):
         self.expand(panel)
         self.page.evaluate('window.__rsMock.setError = true')
         panel.locator('#release-signal-season').select_option('2')
-        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 本季完结 · 2 集')
         expect(panel.locator('#release-signal-season')).to_have_value('2')
         self.assertEqual(len(self.requests()), 5)
         self.assertFalse(self.page.evaluate(f"Object.hasOwn(window.__rsMock.storage, {json.dumps(SEASONS_KEY)})"))
@@ -893,7 +900,7 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator('.rs-status')).to_contain_text('存在冲突')
         self.expand(panel)
         panel.locator('#release-signal-season').select_option('1')
-        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 1 季 · 本季完结 · 2 集')
         expect(panel.locator('[data-kind="recent"]')).to_have_text('S01E02 · 2026-11-04')
 
     def test_40_single_season_cannot_override_explicit_page_season(self):
@@ -1008,6 +1015,115 @@ class BrowserSmoke(unittest.TestCase):
             page.evaluate("document.body.style.zoom='1'")
         movie_panel.screenshot(path=str(self.artifacts / 'movie-fixed-columns.png'))
         tv_panel.screenshot(path=str(self.artifacts / 'tv-fixed-columns.png'))
+
+
+    def test_53_conflicting_premiere_dates_never_confirm_completion(self):
+        for index, (catalog_date, detail_date) in enumerate([
+            ('2027-01-01', '2027-01-01'), ('2027-01-01', '2026-11-01'), ('2026-11-01', '2027-01-01'),
+        ]):
+            with self.subTest(catalog_date=catalog_date, detail_date=detail_date):
+                catalog = tv_series(); catalog['seasons'][1]['air_date'] = catalog_date
+                data = tv_season(tv_episode(1, '2026-11-01'), tv_episode(2, '2026-11-04', 'finale'))
+                data['air_date'] = detail_date
+                plans = [response(tv_finding()), response(catalog), response(data)]
+                change = "document.querySelector('h1').textContent = '示例剧集 第二季'"
+                if index == 0:
+                    panel = self.start(plans, html_change=change)
+                else:
+                    _, panel = self.another_tab(plans, html_change=change)
+                expect(panel.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 2 集')
+                expect(panel.locator('[data-kind="next"]')).to_have_text('暂未查到日期')
+                expect(panel.locator('[data-kind="next"]')).to_have_attribute('data-status', 'unknown')
+                self.open_records(panel)
+                expect(panel.locator('.rs-records')).to_contain_text('开播日期与单集记录存在冲突，无法确认本季完结')
+                expect(panel.locator('.rs-records')).not_to_contain_text('完结依据：')
+                expect(panel.locator('tbody tr')).to_have_count(2)
+        panel.screenshot(path=str(self.artifacts / 'tv-premiere-conflict.png'))
+
+    def test_54_preview_season_context_survives_loading_errors_and_specials(self):
+        catalog = tv_series()
+        catalog['seasons'].append({'id': 500, 'season_number': 0, 'episode_count': 2, 'air_date': '2026-11-01'})
+        first = tv_season(tv_episode(1, '2026-11-01', season_number=1), tv_episode(2, '2026-11-04', 'finale', season_number=1), season_number=1)
+        second = tv_season(tv_episode(1, '2026-11-11'), tv_episode(2, '2026-11-18', 'finale'))
+        panel = self.start([response(tv_finding()), response(catalog), response(first)],
+                           html_change="document.querySelector('h1').textContent = '示例剧集 第一季'")
+        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        self.expand(panel)
+        self.page.evaluate('plans => window.__rsMock.plans.push(...plans)', [response(tv_finding()), response(catalog), response(second, delay=700)])
+        panel.locator('#release-signal-season').select_option('2')
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 查询中…')
+        panel.locator('.rs-summary').click()
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 预计开播 · 2026-11-11')
+        expect(panel.locator('.rs-content')).to_be_hidden()
+        panel.screenshot(path=str(self.artifacts / 'tv-preview-collapsed.png'))
+        self.expand(panel)
+        self.page.evaluate('window.__rsMock.plans.push({networkError:true})')
+        panel.get_by_role('button', name='刷新', exact=True).click()
+        expect(panel.locator('.rs-summary-text')).to_have_text('第 2 季 · 查询失败')
+        expect(panel.locator('[data-kind="next"]')).to_have_text('S02E01 · 预计 2026-11-11')
+        special = tv_season(tv_episode(1, '2026-11-01', season_number=0), tv_episode(2, '2026-11-04', 'finale', season_number=0), season_number=0)
+        self.page.evaluate('plans => window.__rsMock.plans.push(...plans)', [response(tv_finding()), response(catalog), response(special)])
+        panel.locator('#release-signal-season').select_option('0')
+        expect(panel.locator('.rs-summary-text')).to_have_text('特别篇 · 已有播出记录 · 第 2 集')
+        panel.locator('#release-signal-season').select_option('')
+        expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
+        expect(panel.locator('#release-signal-season')).to_have_value('1')
+
+    def test_55_summary_links_have_precise_targets_without_changing_disclosures(self):
+        movie = self.start([response(finding()), response(releases(record(4, '2026-11-01'), record(5, '2026-12-01')))])
+        expect(movie.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2026-11-01')
+        self.expand(movie)
+        expect(movie.locator('[data-kind="digital"] a')).to_have_text('已发行 · 2026-11-01')
+        expect(movie.locator('[data-kind="physical"] a')).to_have_text('预计 · 2026-12-01')
+        for entry in movie.locator('.rs-row a').all():
+            self.assertEqual(entry.get_attribute('href'), 'https://www.themoviedb.org/movie/42/releases')
+            self.assertEqual(entry.get_attribute('target'), '_blank')
+            self.assertEqual(entry.get_attribute('rel'), 'noopener noreferrer')
+        expect(movie.locator('.rs-records')).not_to_have_attribute('open')
+        expect(movie.locator('.rs-summary a')).to_have_count(0)
+        # Test a real link click against a local response, with no external traffic.
+        self.context.route('https://www.themoviedb.org/**', lambda route: route.fulfill(status=200, content_type='text/html', body='<title>Mock TMDB</title>'))
+        with self.context.expect_page() as popup_info:
+            movie.locator('[data-kind="digital"] a').click(position={'x': 10, 'y': 7})
+        popup = popup_info.value
+        popup.wait_for_url('https://www.themoviedb.org/movie/42/releases')
+        popup.close()
+        expect(movie.locator('.rs-disclosure')).to_have_attribute('open', '')
+        expect(movie.locator('.rs-records')).not_to_have_attribute('open')
+        self.open_records(movie)
+        expect(movie.locator('tbody a')).to_have_count(0)
+        expect(movie.locator('.rs-source-line a')).to_have_count(1)
+        movie.screenshot(path=str(self.artifacts / 'movie-summary-links.png'))
+
+        data = tv_season(tv_episode(1, '2026-11-04'), tv_episode(2, '2026-11-11', 'finale'))
+        tv_page, tv = self.another_tab([response(tv_finding()), response(tv_series()), response(data)],
+                                     html_change="document.querySelector('h1').textContent = '示例剧集 第二季'")
+        expect(tv.locator('.rs-summary-text')).to_have_text('已有播出记录 · 第 1 集')
+        self.expand(tv)
+        expect(tv.locator('[data-kind="recent"] a')).to_have_count(1)
+        expect(tv.locator('[data-kind="recent"] a')).to_have_text('S02E01 · 2026-11-04')
+        expect(tv.locator('[data-kind="next"] a')).to_have_count(1)
+        expect(tv.locator('[data-kind="next"] a')).to_have_text('S02E02 · 预计 2026-11-11')
+        self.assertEqual(tv.locator('[data-kind="recent"] a').get_attribute('href'), 'https://www.themoviedb.org/tv/55/season/2/episode/1')
+        self.assertEqual(tv.locator('[data-kind="next"] a').get_attribute('href'), 'https://www.themoviedb.org/tv/55/season/2/episode/2')
+        with self.context.expect_page() as popup_info:
+            tv.locator('[data-kind="next"] a').click()
+        popup = popup_info.value
+        popup.wait_for_url('https://www.themoviedb.org/tv/55/season/2/episode/2')
+        popup.close()
+        expect(tv.locator('.rs-disclosure')).to_have_attribute('open', '')
+        expect(tv.locator('.rs-records')).not_to_have_attribute('open')
+        expect(tv.locator('.rs-summary a')).to_have_count(0)
+        self.assertEqual(len(tv_page.evaluate('window.__rsMock.requests')), 3)
+        tv.screenshot(path=str(self.artifacts / 'tv-summary-links.png'))
+
+        _, empty = self.another_tab([response(finding()), response(releases())])
+        expect(empty.locator('.rs-summary-text')).to_have_text('暂未查到发行记录')
+        expect(empty.locator('.rs-row a')).to_have_count(0)
+        _, incomplete = self.another_tab([response(tv_finding()), response(tv_series()), response(tv_season(tv_episode(1, None)))],
+                                         html_change="document.querySelector('h1').textContent = '示例剧集 第二季'")
+        expect(incomplete.locator('.rs-summary-text')).to_have_text('暂未查到播出信息')
+        expect(incomplete.locator('.rs-row a')).to_have_count(0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         发行信号 / Release Signal
 // @namespace    release-signal.local
-// @version      0.5.3
+// @version      0.5.4
 // @license      MIT
 // @description  在豆瓣影视详情页显示电影发行记录及剧集按季播出进度，作为搜索前的参考。
 // @homepageURL  https://github.com/chenfangshuo/Release-Signal
@@ -227,7 +227,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
   }
 
   function deriveTvStatus(series, season, today) {
-    if (!season) return { status: 'unknown', complete: false, text: '请确认季数', last: null, next: null };
+    if (!season) return { status: 'unknown', complete: false, premiereConflict: false, text: '请确认季数', last: null, next: null };
     const summary = series.seasons.find(item => item.season_number === season.season_number);
     const episodes = season.episodes;
     const dated = episodes.filter(item => item.air_date);
@@ -238,9 +238,13 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     const contiguous = episodes.every((item, index) => item.episode_number === index + 1);
     const orderedDates = episodes.every((item, index) => !index || (item.air_date && episodes[index - 1].air_date && item.air_date >= episodes[index - 1].air_date));
     const finales = episodes.filter(item => item.episode_type === 'finale');
+    // 两处季开播日期都要核对，不能用季详情的正常日期掩盖目录中的矛盾。
+    // 开播日可早于现有单集日期；晚于已知最早单集时，不能可靠确认完结。
+    const earliestEpisodeDate = dated.map(item => item.air_date).sort()[0];
+    const premiereConflict = Boolean(earliestEpisodeDate && [summary?.air_date, season.air_date].some(date => date && date > earliestEpisodeDate));
     // 完结须同时有季终标记、完整连续的集数和已到日期。下一集为空、全剧 Ended/Canceled
     // 或已有日期全部过去，都不能单独作为依据；第 0 季的特别篇是开放集合，不判完结。
-    const complete = season.season_number > 0 && !series.invalidCount && !season.invalidCount &&
+    const complete = season.season_number > 0 && !series.invalidCount && !season.invalidCount && !premiereConflict &&
       summary?.episode_count > 0 && episodes.length === summary.episode_count && contiguous && orderedDates &&
       past.length === episodes.length && finales.length === 1 && finales[0] === episodes.at(-1);
     let status = 'unknown', text = '暂未查到播出信息';
@@ -251,7 +255,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const premiere = firstDate > today ? firstDate : season.air_date > today ? season.air_date : null;
       if (premiere) { status = 'future'; text = '预计开播 · ' + premiere; }
     }
-    return { status, complete: Boolean(complete), text, last, next };
+    return { status, complete: Boolean(complete), premiereConflict, text, last, next };
   }
 
   // 日期判定：展示来源标注的日历日期，不把它当作已核实的精确上线时刻。
@@ -573,7 +577,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     #release-signal-panel .rs-actions {display:flex;gap:6px;flex-wrap:wrap}
     #release-signal-panel .rs-button {font:inherit;line-height:1.5;padding:2px 8px;border:1px solid #bdcfc2;border-radius:4px;background:#fff;color:#276343;cursor:pointer}
     #release-signal-panel .rs-button:disabled {opacity:.5;cursor:default}
-    #release-signal-panel .rs-button:focus-visible,#release-signal-panel summary:focus-visible {outline:2px solid #276343;outline-offset:2px}
+    #release-signal-panel .rs-button:focus-visible,#release-signal-panel summary:focus-visible,#release-signal-panel .rs-row a:focus-visible {outline:2px solid #276343;outline-offset:2px}
     #release-signal-panel p {margin:7px 0}
     #release-signal-panel .rs-status {font-weight:600}
     #release-signal-panel [data-status="available"] {color:#17663a}
@@ -600,6 +604,8 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
     /* 两种明细表都优先保留固定内容：表头、类型/集号、日期；长地区、标题、说明可换行。 */
     #release-signal-panel .rs-table th,#release-signal-panel .rs-table td:nth-child(-n+2),#release-signal-panel .rs-tv-table td:last-child {white-space:nowrap}
     #release-signal-panel a {color:#276343;background:transparent}
+    #release-signal-panel .rs-row a {color:inherit;text-decoration:underline;text-decoration-color:#bdcfc2;text-underline-offset:2px}
+    #release-signal-panel .rs-row a:hover {text-decoration-color:currentColor}
     #release-signal-panel .rs-table a {color:inherit}
     #release-signal-panel a:hover {text-decoration:underline}
     #release-signal-panel .rs-dialog {width:min(460px,calc(100vw - 32px));max-height:85vh;overflow:auto;border:1px solid #bdcfc2;border-radius:8px;padding:20px;background:#fff;color:#333;font:14px/1.7 Arial,"Microsoft YaHei",sans-serif;white-space:normal}
@@ -753,6 +759,15 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         text = '尚未查询当前作品，请点击刷新。';
         compactText = '等待查询';
       }
+      // 仅在偏离页面自动识别结果的临时预览中加季号；加载或失败时也保留当前查看目标。
+      if (tv && manualSeason && wantedSeason !== null) {
+        const automatic = resolveSeason(data.result.series, data.result.work, seasonHint.number, { autoSeason: !seasonHint.conflict });
+        if (wantedSeason !== automatic.number) {
+          const prefix = (wantedSeason === 0 ? '特别篇' : '第 ' + wantedSeason + ' 季') + ' · ';
+          compactText = prefix + compactText;
+          text = prefix + text;
+        }
+      }
       compactStatus.textContent = compactText;
       compactStatus.dataset.status = overall;
       dot.dataset.status = overall;
@@ -781,15 +796,27 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         rowLabels[kind].textContent = tv ? (kind === 'digital' ? '最近一集' : '下一集') : (kind === 'digital' ? 'Web' : '实体');
         if (tv) {
           const episode = kind === 'digital' ? state.last : state.next;
-          rows[kind].textContent = episode ? episodeCode(episode) + ' · ' + (kind === 'physical' ? '预计 ' : '') + episode.air_date :
-            !data.result.season ? '请先确认季数' : kind === 'digital' ? '暂无播出记录' : state.complete ? '本季已完结' : '暂未查到日期';
+          if (episode) {
+            // 集号与日期共用一个单集入口，避免同一行出现两个相同目标的链接。
+            const entry = link(episodeCode(episode) + ' · ' + (kind === 'physical' ? '预计 ' : '') + episode.air_date,
+              'https://www.themoviedb.org/tv/' + data.result.work.id + '/season/' + episode.season_number + '/episode/' + episode.episode_number);
+            entry.title = '在新标签页查看该集的 TMDB 记录';
+            rows[kind].replaceChildren(entry);
+          } else {
+            rows[kind].textContent = !data.result.season ? '请先确认季数' : kind === 'digital' ? '暂无播出记录' : state.complete ? '本季已完结' : '暂未查到日期';
+          }
           rows[kind].dataset.status = (kind === 'digital' && episode) || (kind === 'physical' && state.complete) ? 'available' : episode ? 'future' : 'unknown';
           rows[kind].title = episode ? '依据 TMDB 的公开播出日期记录，未独立核实实际播出或平台上线。' : '';
           continue;
         }
         const part = state?.[kind];
         rows[kind].dataset.status = part?.status || 'unknown';
-        rows[kind].textContent = part ? ({ available: '已发行 · ', future: '预计 · ', unknown: '暂未查到发行记录' }[part.status] + (part.date || '')) : '无法判断';
+        const label = part ? { available: '已发行 · ', future: '预计 · ', unknown: '暂未查到发行记录' }[part.status] : '无法判断';
+        if (part?.date) {
+          const entry = link(label + part.date, 'https://www.themoviedb.org/movie/' + data.result.work.id + '/releases');
+          entry.title = '在新标签页查看 TMDB 发行记录';
+          rows[kind].replaceChildren(entry);
+        } else rows[kind].textContent = label;
         rows[kind].title = part?.status === 'available' ? '依据 TMDB 中最早的有效发行日期记录，未独立核实实际上线。' : '';
       }
       details.hidden = !supported;
@@ -827,6 +854,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       if (work.sourceEpisode !== undefined) detailBody.append(node('p', 'rs-footnote', '匹配依据：IMDb 对应 ' + episodeCode({ season_number: work.sourceSeason, episode_number: work.sourceEpisode }) + '，已通过所属剧集与季号定位；以下显示当前所选季的记录。'));
       if (!season) { detailBody.append(node('p', 'rs-muted', '确认季数后查看单集播出记录。')); return; }
       if (state.complete) detailBody.append(node('p', 'rs-footnote', '完结依据：TMDB 标注 ' + episodeCode(season.episodes.at(-1)) + ' 为季终集，且当季集数完整、所有集的日期均已到。'));
+      if (state.premiereConflict) detailBody.append(node('p', 'rs-muted', '开播日期与单集记录存在冲突，无法确认本季完结。'));
       if (season.invalidCount || result.series.invalidCount || season.episodes.some(item => !item.air_date)) {
         detailBody.append(node('p', 'rs-muted', '播出信息不完整；日期缺失或异常的记录不参与日期判断，无法确认本季完结。'));
       }
@@ -859,15 +887,14 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       }
       const wrap = node('div', 'rs-table-wrap'), table = node('table', 'rs-table');
       const head = node('thead'), heading = node('tr'), body = node('tbody');
-      for (const label of ['类型', '日期 / 来源', '地区', '记录说明']) {
+      for (const label of ['类型', '日期', '地区', '记录说明']) {
         const th = node('th', '', label); th.scope = 'col'; heading.append(th);
       }
       head.append(heading);
       for (const record of grouped) {
         const tr = node('tr');
         tr.dataset.status = record.date <= localDay(now()) ? 'available' : 'future';
-        const dateCell = node('td');
-        dateCell.append(link(record.date, source));
+        const dateCell = node('td', '', record.date);
         tr.append(node('td', '', record.kind === 'digital' ? 'Web' : '实体'), dateCell, node('td', '', record.countries.map(countryName).join('、')), node('td', '', record.note || '—'));
         body.append(tr);
       }
@@ -1040,7 +1067,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const logoLink = link('', 'https://www.themoviedb.org');
       const logo = node('img', 'rs-logo'); logo.alt = 'TMDB'; logo.src = TMDB_LOGO;
       logoLink.append(logo);
-      element.append(node('p', '', '发行信号 0.5.3 · 以公开记录作为搜索前的参考。'), logoLink,
+      element.append(node('p', '', '发行信号 0.5.4 · 以公开记录作为搜索前的参考。'), logoLink,
         // 仅展示诊断需要的非敏感字段；不输出完整 GM_info、配置、请求或凭据。
         node('p', 'rs-footnote rs-runtime', '管理器：' + String(gm.info?.scriptHandler || '未知').slice(0, 80) + ' ' + String(gm.info?.version || '未知版本').slice(0, 40) +
           ' · 运行模式：' + String(gm.info?.sandboxMode || gm.info?.injectInto || '未知').slice(0, 40)),
