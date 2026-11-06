@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         发行信号 / Release Signal
 // @namespace    release-signal.local
-// @version      0.5.4
+// @version      0.5.5
 // @license      MIT
 // @description  在豆瓣影视详情页显示电影发行记录及剧集按季播出进度，作为搜索前的参考。
 // @homepageURL  https://github.com/chenfangshuo/Release-Signal
@@ -812,11 +812,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
         const part = state?.[kind];
         rows[kind].dataset.status = part?.status || 'unknown';
         const label = part ? { available: '已发行 · ', future: '预计 · ', unknown: '暂未查到发行记录' }[part.status] : '无法判断';
-        if (part?.date) {
-          const entry = link(label + part.date, 'https://www.themoviedb.org/movie/' + data.result.work.id + '/releases');
-          entry.title = '在新标签页查看 TMDB 发行记录';
-          rows[kind].replaceChildren(entry);
-        } else rows[kind].textContent = label;
+        rows[kind].textContent = label + (part?.date || '');
         rows[kind].title = part?.status === 'available' ? '依据 TMDB 中最早的有效发行日期记录，未独立核实实际上线。' : '';
       }
       details.hidden = !supported;
@@ -1067,7 +1063,7 @@ and is not covered by the above license. See DEVELOPER.md for attribution.
       const logoLink = link('', 'https://www.themoviedb.org');
       const logo = node('img', 'rs-logo'); logo.alt = 'TMDB'; logo.src = TMDB_LOGO;
       logoLink.append(logo);
-      element.append(node('p', '', '发行信号 0.5.4 · 以公开记录作为搜索前的参考。'), logoLink,
+      element.append(node('p', '', '发行信号 0.5.5 · 以公开记录作为搜索前的参考。'), logoLink,
         // 仅展示诊断需要的非敏感字段；不输出完整 GM_info、配置、请求或凭据。
         node('p', 'rs-footnote rs-runtime', '管理器：' + String(gm.info?.scriptHandler || '未知').slice(0, 80) + ' ' + String(gm.info?.version || '未知版本').slice(0, 40) +
           ' · 运行模式：' + String(gm.info?.sandboxMode || gm.info?.injectInto || '未知').slice(0, 40)),

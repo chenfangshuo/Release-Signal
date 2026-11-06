@@ -1069,31 +1069,32 @@ class BrowserSmoke(unittest.TestCase):
         expect(panel.locator('.rs-summary-text')).to_have_text('本季完结 · 2 集')
         expect(panel.locator('#release-signal-season')).to_have_value('1')
 
-    def test_55_summary_links_have_precise_targets_without_changing_disclosures(self):
+    def test_55_movie_plain_summaries_and_tv_episode_links(self):
         movie = self.start([response(finding()), response(releases(record(4, '2026-11-01'), record(5, '2026-12-01')))])
         expect(movie.locator('.rs-summary-text')).to_have_text('已有发行记录 · 2026-11-01')
         self.expand(movie)
-        expect(movie.locator('[data-kind="digital"] a')).to_have_text('已发行 · 2026-11-01')
-        expect(movie.locator('[data-kind="physical"] a')).to_have_text('预计 · 2026-12-01')
-        for entry in movie.locator('.rs-row a').all():
-            self.assertEqual(entry.get_attribute('href'), 'https://www.themoviedb.org/movie/42/releases')
-            self.assertEqual(entry.get_attribute('target'), '_blank')
-            self.assertEqual(entry.get_attribute('rel'), 'noopener noreferrer')
+        expect(movie.locator('[data-kind="digital"]')).to_have_text('已发行 · 2026-11-01')
+        expect(movie.locator('[data-kind="physical"]')).to_have_text('预计 · 2026-12-01')
+        expect(movie.locator('.rs-row a')).to_have_count(0)
         expect(movie.locator('.rs-records')).not_to_have_attribute('open')
         expect(movie.locator('.rs-summary a')).to_have_count(0)
-        # Test a real link click against a local response, with no external traffic.
+        self.open_records(movie)
+        expect(movie.locator('tbody a')).to_have_count(0)
+        source = movie.locator('.rs-source-line a')
+        expect(source).to_have_count(1)
+        self.assertEqual(source.get_attribute('href'), 'https://www.themoviedb.org/movie/42/releases')
+        self.assertEqual(source.get_attribute('target'), '_blank')
+        self.assertEqual(source.get_attribute('rel'), 'noopener noreferrer')
+        # Test the single movie source link against a local response, with no external traffic.
         self.context.route('https://www.themoviedb.org/**', lambda route: route.fulfill(status=200, content_type='text/html', body='<title>Mock TMDB</title>'))
         with self.context.expect_page() as popup_info:
-            movie.locator('[data-kind="digital"] a').click(position={'x': 10, 'y': 7})
+            source.click()
         popup = popup_info.value
         popup.wait_for_url('https://www.themoviedb.org/movie/42/releases')
         popup.close()
         expect(movie.locator('.rs-disclosure')).to_have_attribute('open', '')
-        expect(movie.locator('.rs-records')).not_to_have_attribute('open')
-        self.open_records(movie)
-        expect(movie.locator('tbody a')).to_have_count(0)
-        expect(movie.locator('.rs-source-line a')).to_have_count(1)
-        movie.screenshot(path=str(self.artifacts / 'movie-summary-links.png'))
+        expect(movie.locator('.rs-records')).to_have_attribute('open', '')
+        movie.screenshot(path=str(self.artifacts / 'movie-plain-summaries.png'))
 
         data = tv_season(tv_episode(1, '2026-11-04'), tv_episode(2, '2026-11-11', 'finale'))
         tv_page, tv = self.another_tab([response(tv_finding()), response(tv_series()), response(data)],
